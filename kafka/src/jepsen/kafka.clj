@@ -37,7 +37,8 @@
              [knossos.op :as op]
              [jepsen.control.util :as cu]
              [jepsen.zookeeper :as zk]
-             [jepsen.os.debian :as debian])
+             ;[jepsen.os.debian :as debian]
+             [jepsen.os.ubuntu :as ubuntu])
   )
 
 (def topic "jepsen")
@@ -104,6 +105,39 @@
        (future  (create-topic)))
   ))
 
+(defn zk-node-ids
+      "Returns a map of node names to node ids."
+      [test]
+      (->> test
+           :nodes
+           (map-indexed (fn [i node] [node i]))
+           (into {})))
+
+(defn zk-node-id
+      "Given a test and a node name from that test, returns the ID for that node."
+      [test node]
+      ((zk-node-ids test) node))
+
+(defn zoo-cfg-servers
+      "Constructs a zoo.cfg fragment for servers."
+      [test]
+      (->> (zk-node-ids test)
+           (map (fn [[node id]]
+                    (str "server." id "=" (name node) ":2888:3888")))
+           (str/join "\n")))
+
+(defn zk-deploy [test node]
+  (c/exec :echo (zk-node-id test node) :> "/etc/zookeeper/conf/myid")
+
+  (c/exec :echo (str (slurp (io/resource "zoo.cfg"))
+                     "\n"
+                     (zoo-cfg-servers test))
+          :> "/etc/zookeeper/conf/zoo.cfg")
+
+  (info node "ZK restarting")
+  (c/exec :service :zookeeper :restart)
+  (info node "ZK ready"))
+
 (defn install! [node sversion kversion]
    ; Install specific versions
   (info "install! Kafka begins" node )
@@ -133,17 +167,18 @@
 (defn db
     "Kafka DB for a particular version."
     [sversion kversion]
-    (let [zk (zk/db "3.4.5+dfsg-2+deb8u1")]
+    (let [zk (zk/db "3.4.8-1")]
       (reify db/DB
         (setup!  [_ test node]
           (let [id (Integer.  (re-find #"\d+", (name node)))]
-            (info "setup! zk " node)
+            ;(info "setup! zk " node)
             ;(db/setup! zk test node)
-            (info "setup! kafka" node)
-            (install! node sversion kversion)
+            ;(info "setup! kafka" node)
+            ;(install! node sversion kversion)
             ; need to start zk right before kafka deploy
-            (db/setup! zk test node)
-            (deploy id node version)
+            ;(db/setup! zk test node)
+            (zk-deploy test node)
+            (deploy id node kversion)
             (info "setup! kafka done"  node)
         ))
         (teardown!  [_ test node]
@@ -303,7 +338,7 @@
 (defn kafka-test
     [sversion kversion]
       (assoc  tests/noop-test
-             :os debian/os
+             :os ubuntu/os
              :db  (db sversion kversion)
              :client  (client)
              :model   (model/unordered-queue)

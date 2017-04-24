@@ -43,16 +43,22 @@
 
 (def topic "jepsen")
 
+(defn topic-status [node]
+  (c/on node (info "kafka-topics.sh --describe:" (c/exec (c/lit (str "/opt/kafka/bin/kafka-topics.sh --describe --zookeeper localhost:2181 --topic " topic))))))
+
 (defn create-topic
-  []
-  ;(Thread/sleep 20)
+  [node]
+  (Thread/sleep 20)
   (info "creating topic")
-  (info "kafka-topics.sh --create:" (c/exec (c/lit (str "/opt/kafka/bin/kafka-topics.sh --create --zookeeper localhost:2181 --replication-factor 3 --partitions 100 --topic " topic
-                            " --config unclean.leader.election.enable=false --config min.insync.replicas=3"
-                            ))))
+  (info "kafka-topics.sh --create:" (c/exec (c/lit (str "/opt/kafka/bin/kafka-topics.sh --create --zookeeper localhost:2181 --replication-factor 3 --partitions 5 --topic " topic
+                                                          " --config unclean.leader.election.enable=false --config min.insync.replicas=3"
+                                                          ))))
   (info "kafka-topics.sh --list:" (c/exec (c/lit "/opt/kafka/bin/kafka-topics.sh --list --zookeeper localhost:2181")))
+  (topic-status node)
   (info "creating topic done")
 )
+
+
 
 (defn start!
   [id]
@@ -69,9 +75,11 @@
 
 (defn stop!
   []
+  (info "stop! kafka (and zookeeper?).")
   (c/su
-     ;(c/exec :ps :aux "|" :grep :kafka "|" :grep :-v :grep "|" :awk "{print $2 }" "|" :xargs :kill :-s :kill)
-     (c/exec (c/lit  "ps aux | grep kafka | grep -v grep | awk '{ print $2 }' | xargs kill -s kill"))))
+    ;(c/exec :service :zookeeper :stop)
+    ;(c/exec (c/lit  "ps aux | grep zookeeper | grep -v grep | awk '{ print $2 }' | xargs kill -s kill"))
+    (c/exec (c/lit  "ps aux | grep kafka | grep -v grep | awk '{ print $2 }' | xargs kill -s kill"))))
 
 (defn restart!
   [id]
@@ -100,9 +108,9 @@
     (info "deploy start! begins" id )
     (start! id)
     (info "deploy start! ends!" id )
-    ; Create topic asynchronously
-    (when (= id 1)
-       (future  (create-topic)))
+    ; Create topic synchronously
+    (when (= id 5)
+       (create-topic node))
   ))
 
 (defn zk-node-ids
@@ -150,18 +158,18 @@
      ;(info node "install-jdk8!:" (debian/install-jdk8!))
     ;(c/exec :apt-get :install :-y :--force-yes "default-jre")
      ;(info node "apt-get install -y --force-yes wget:" (c/exec :apt-get :install :-y :--force-yes "wget"))
-     (info node "rm -rf /opt/:" (c/exec :rm :-rf "/opt/"))
-     (info node "mkdir -p /opt/:" (c/exec :mkdir :-p "/opt/"))
+     ;(info node "rm -rf /opt/:" (c/exec :rm :-rf "/opt/"))
+     ;(info node "mkdir -p /opt/:" (c/exec :mkdir :-p "/opt/"))
     (c/cd "/opt/"
           ; http://apache.claz.org/kafka/0.10.0.1/kafka_2.11-0.10.0.1.tgz
-          (info "wget kafka:" (c/exec :wget (format "http://apache.claz.org/kafka/%s/%s.tgz" kversion kafka)))
-          (info "gzip -d kafka:" (c/exec :gzip :-d (format "%s.tgz" kafka)))
-          (info "tar xf kafka:" (c/exec :tar :xf (format "%s.tar" kafka)))
-          (info "mv kafka:" (c/exec :mv kafka "kafka"))
-          (info "rm kafka.tar:" (c/exec :rm (format "%s.tar" kafka))))
-    (info "install! Kafka before call deploy" node ))
-  (info "install! Kafka ends call deploy" node )
-  (info "install! Kafka ends" node )
+          ;(info "wget kafka:" (c/exec :wget (format "http://apache.claz.org/kafka/%s/%s.tgz" kversion kafka)))
+          ;(info "gzip -d kafka:" (c/exec :gzip :-d (format "%s.tgz" kafka)))
+          (info "tar xfz kafka:" (c/exec (c/lit (format "tar xfz /tmp/%s.tgz -C /opt" kafka))))
+          (info "mv kafka:" (c/exec :mv kafka "kafka")))
+          ;(info "rm kafka.tar:" (c/exec :rm (format "%s.tar" kafka))))
+  ; (info "install! Kafka before call deploy" node ))
+  ; (info "install! Kafka ends call deploy" node )
+  (info "install! Kafka ends" node ))
 )
 
 (defn db
@@ -264,8 +272,8 @@
 
   (invoke!  [this test op]
      (case  (:f op)
-         :enqueue (enqueue! client queue op)
-         :dequeue  (dequeue! client queue op)
+         :enqueue (do (topic-status (:node client)) (enqueue! client queue op))
+         :dequeue  (do (topic-status (:node client)) (dequeue! client queue op))
          :drain  (do
                    ; Note that this does more dequeues than strictly necessary
                    ; owing to lazy sequence chunking.

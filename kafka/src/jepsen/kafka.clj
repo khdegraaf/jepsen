@@ -50,6 +50,13 @@
   [node]
   (Thread/sleep 20)
   (info "creating topic")
+      ; Delete it if it exists
+      (try
+        (info "kafka-topics.sh --delete:" (c/exec (c/lit (str "/opt/kafka/bin/kafka-topics.sh --zookeeper localhost:2181 --delete --topic " topic))))
+        (Thread/sleep 20)
+        (catch Exception e
+          (info "Didn't need to delete old topic.")
+          ))
   (info "kafka-topics.sh --create:" (c/exec (c/lit (str "/opt/kafka/bin/kafka-topics.sh --create --zookeeper localhost:2181 --replication-factor 3 --partitions 5 --topic " topic
                                                           " --config unclean.leader.election.enable=false --config min.insync.replicas=3"
                                                           ))))
@@ -103,7 +110,7 @@
 
 (defn deploy [id node version]
   (let [filename "/opt/kafka/config/server.properties"]
-    ; (info "deploy calls set-broker-id!" filename node id )
+    (c/exec :echo (slurp (io/resource "server.properties")) :> filename)
     (set-broker-id! filename id)
     (info "deploy start! begins" id )
     (start! id)
@@ -217,7 +224,7 @@
             message (first cr)
             value (:value message)]
            (if (nil? message)
-             (assoc op :type :fail :value :exhausted (:debug {:node node}))
+             (assoc op :type :fail, :value :exhausted, :debug {:node node})
              (do
                ;(println "message:" message)
                (gregor/commit-offsets! c [{:topic queue :partition (:partition message) :offset (+ 1 (:offset message))}])

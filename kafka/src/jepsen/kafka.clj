@@ -44,7 +44,7 @@
 (def topic "jepsen")
 
 (defn topic-status [node]
-  (c/on node (info "kafka-topics.sh --describe:" (c/exec (c/lit (str "/opt/kafka/bin/kafka-topics.sh --describe --zookeeper localhost:2181 --topic " topic))))))
+  (c/on node (info node "kafka-topics.sh --describe:" (c/exec (c/lit (str "/opt/kafka/bin/kafka-topics.sh --describe --zookeeper localhost:2181 --topic " topic))))))
 
 (defn create-topic
   [node]
@@ -217,17 +217,17 @@
             message (first cr)
             value (:value message)]
            (if (nil? message)
-             (assoc op :type :fail :value :exhausted)
+             (assoc op :type :fail :value :exhausted (:debug {:node node}))
              (do
                ;(println "message:" message)
                (gregor/commit-offsets! c [{:topic queue :partition (:partition message) :offset (+ 1 (:offset message))}])
                ; If this fails, we will throw an exception and return timeout.  That way we don't consume it.
-               (assoc op :type :ok :value (codec/decode value)))))
+               (assoc op :type :ok :value (codec/decode value) :debug {:node node :partition (:partition message) :offset (:offset message)}))))
      (catch Exception e
        ;(pst e 25)
        ; Exception is probably timeout variant
        (info (str "Dequeue exception: " (.getMessage e) e))
-       (assoc op :type :fail :value :timeout))
+       (assoc op :type :fail :value :timeout :debug {:node node}))
      (finally (gregor/close c)))))
 
 (defn dequeue!
@@ -235,7 +235,7 @@
   corresponding operation."
   [client queue op]
   (timeout 10000
-           (assoc op :type :fail :value :timeout)
+           (assoc op :type :fail :value :timeout :debug {:node (:node client)})
            (dequeue-only! op (:node client) queue)))
 
 (defn enqueue-only! [node queue value]
@@ -252,9 +252,9 @@
 
 (defn enqueue! [client queue op]
   (try
-    (timeout 10000  (assoc op :type :info, :value :timeout)
+    (timeout 10000  (assoc op :type :info, :value :timeout, :debug {:node (:node client)})
              (enqueue-only! (:node client) queue (:value op))
-             (assoc op :type :ok))
+             (assoc op :type :ok :debug {:node (:node client)}))
     (catch Exception e
       (assoc op :type :info, :value :timeout))))
 

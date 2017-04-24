@@ -50,13 +50,13 @@
   [node]
   (Thread/sleep 20)
   (info "creating topic")
-      ; Delete it if it exists
-      (try
-        (info "kafka-topics.sh --delete:" (c/exec (c/lit (str "/opt/kafka/bin/kafka-topics.sh --zookeeper localhost:2181 --delete --topic " topic))))
-        (Thread/sleep 20)
-        (catch Exception e
-          (info "Didn't need to delete old topic.")
-          ))
+  ; Delete it if it exists
+  (try
+    (info "kafka-topics.sh --delete:" (c/exec (c/lit (str "/opt/kafka/bin/kafka-topics.sh --zookeeper localhost:2181 --delete --topic " topic))))
+    (Thread/sleep 20)
+    (catch Exception e
+      (info "Didn't need to delete old topic.")
+      ))
   (info "kafka-topics.sh --create:" (c/exec (c/lit (str "/opt/kafka/bin/kafka-topics.sh --create --zookeeper localhost:2181 --replication-factor 3 --partitions 5 --topic " topic
                                                           " --config unclean.leader.election.enable=false --config min.insync.replicas=3"
                                                           ))))

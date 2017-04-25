@@ -15,6 +15,7 @@
                     [util       :refer [timeout]]]
             ;[jepsen.os.debian   :as debian]
             [jepsen.os.ubuntu   :as ubuntu]
+            [jepsen.checker.timeline :as timeline]
             [knossos.model      :as model]))
 
 (defn zk-node-ids
@@ -126,7 +127,9 @@
                           (gen/time-limit 15))
           :model   (model/cas-register 0)
           :checker (checker/compose
-                     {:perf   (checker/perf)
+                     {:timeline     (timeline/html)
+                      :perf   (checker/perf)
+                      :latency     (checker/latency-graph)
                       :linear checker/linearizable})}))
 
 (defn -main

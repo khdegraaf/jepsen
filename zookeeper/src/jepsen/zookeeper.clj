@@ -13,7 +13,8 @@
                     [nemesis    :as nemesis]
                     [tests      :as tests]
                     [util       :refer [timeout]]]
-            [jepsen.os.debian   :as debian]
+            ;[jepsen.os.debian   :as debian]
+            [jepsen.os.ubuntu   :as ubuntu]
             [knossos.model      :as model]))
 
 (defn zk-node-ids
@@ -44,9 +45,9 @@
     (setup! [_ test node]
       (c/su
         (info node "installing ZK" version)
-        (debian/install {:zookeeper version
+        (comment (debian/install {:zookeeper version
                          :zookeeper-bin version
-                         :zookeeperd version})
+                         :zookeeperd version}))
 
         (c/exec :echo (zk-node-id test node) :> "/etc/zookeeper/conf/myid")
 
@@ -63,9 +64,9 @@
       (info node "tearing down ZK")
       (c/su
         (c/exec :service :zookeeper :stop)
-        (c/exec :rm :-rf
+        (comment (c/exec :rm :-rf
                 (c/lit "/var/lib/zookeeper/version-*")
-                (c/lit "/var/log/zookeeper/*"))))
+                (c/lit "/var/log/zookeeper/*")))))
 
     db/LogFiles
     (log-files [_ test node]
@@ -111,8 +112,8 @@
   (merge tests/noop-test
          opts
          {:name    "zookeeper"
-          :os      debian/os
-          :db      (db "3.4.5+dfsg-2+deb8u")
+          :os      ubuntu/os
+          :db      (db "3.4.8-1") ;"3.4.5+dfsg-2+deb8u1")
           :client  (client nil nil)
           :nemesis (nemesis/partition-random-halves)
           :generator (->> (gen/mix [r w cas])

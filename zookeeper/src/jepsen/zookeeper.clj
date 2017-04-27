@@ -46,9 +46,9 @@
     (setup! [_ test node]
       (c/su
         (info node "installing ZK" version)
-        (comment (debian/install {:zookeeper version
+        (ubuntu/install {:zookeeper version
                          :zookeeper-bin version
-                         :zookeeperd version}))
+                         :zookeeperd version})
 
         (c/exec :echo (zk-node-id test node) :> "/etc/zookeeper/conf/myid")
 
@@ -65,9 +65,9 @@
       (info node "tearing down ZK")
       (c/su
         (c/exec :service :zookeeper :stop)
-        (comment (c/exec :rm :-rf
+        (c/exec :rm :-rf
                 (c/lit "/var/lib/zookeeper/version-*")
-                (c/lit "/var/log/zookeeper/*")))))
+                (c/lit "/var/log/zookeeper/*"))))
 
     db/LogFiles
     (log-files [_ test node]
@@ -129,7 +129,6 @@
           :checker (checker/compose
                      {:timeline     (timeline/html)
                       :perf   (checker/perf)
-                      :latency     (checker/latency-graph)
                       :linear checker/linearizable})}))
 
 (defn -main

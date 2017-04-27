@@ -71,7 +71,7 @@
   []
   (info "stop! kafka (and zookeeper?).")
   (c/su
-    ;(c/exec :service :zookeeper :stop)
+    (c/exec :service :zookeeper :stop)
     ;(c/exec (c/lit  "ps aux | grep zookeeper | grep -v grep | awk '{ print $2 }' | xargs kill -s kill"))
     (c/exec (c/lit  "ps aux | grep kafka | grep -v grep | awk '{ print $2 }' | xargs kill -s kill"))))
 
@@ -140,6 +140,14 @@
   (c/exec :service :zookeeper :restart)
   (info node "ZK ready"))
 
+(defn zk-teardown! [test node]
+  (info node "tearing down ZK")
+  (c/su
+    (c/exec :service :zookeeper :stop)
+    (c/exec :rm :-rf
+            (c/lit "/var/lib/zookeeper/version-*")
+            (c/lit "/var/log/zookeeper/*"))))
+
 (defn install! [node sversion kversion]
    ; Install specific versions
   (info "install! Kafka begins" node )
@@ -152,8 +160,8 @@
      ;(info node "install-jdk8!:" (debian/install-jdk8!))
     ;(c/exec :apt-get :install :-y :--force-yes "default-jre")
      ;(info node "apt-get install -y --force-yes wget:" (c/exec :apt-get :install :-y :--force-yes "wget"))
-     ;(info node "rm -rf /opt/:" (c/exec :rm :-rf "/opt/"))
-     ;(info node "mkdir -p /opt/:" (c/exec :mkdir :-p "/opt/"))
+    (info node "rm -rf /opt/:" (c/exec :rm :-rf "/opt/"))
+    (info node "mkdir -p /opt/:" (c/exec :mkdir :-p "/opt/"))
     (c/cd "/opt/"
           ; http://apache.claz.org/kafka/0.10.0.1/kafka_2.11-0.10.0.1.tgz
           ;(info "wget kafka:" (c/exec :wget (format "http://apache.claz.org/kafka/%s/%s.tgz" kversion kafka)))
@@ -175,8 +183,8 @@
           (let [id (Integer.  (re-find #"\d+", (name node)))]
             ;(info "setup! zk " node)
             ;(db/setup! zk test node)
-            ;(info "setup! kafka" node)
-            ;(install! node sversion kversion)
+            (info "setup! kafka" node)
+            (install! node sversion kversion)
             ; need to start zk right before kafka deploy
             ;(db/setup! zk test node)
             (zk-deploy test node)
@@ -185,12 +193,16 @@
         ))
         (teardown!  [_ test node]
           ; Comment out for now, saves time on retries, setting up sometimes doesn't work first time, succeeds on second try...
-          ;(info "tearing down Kafka NUKE!!!" node)
-          ;(nuke!)
-          ;(info "Kafka NUKED!!!" node)
+          (info "tearing down Kafka NUKE!!!" node)
+          (nuke!)
+          (info "Kafka NUKED!!!" node)
           ;(info "tearing down Zookeeper")
-          ;(db/teardown! zk test node)
-          )));)
+          (zk-teardown! test node)
+          )
+        db/LogFiles
+        (log-files [_ test node]
+                   (concat ["/var/log/zookeeper/zookeeper.log"] (cu/ls-full "/opt/kafka/logs")))
+             ));)
 
 (defn test-setup-all []
       (let [db (db "2.12" "0.10.2.0")
@@ -207,7 +219,7 @@
 (defn dequeue-only! [op node queue]
   (let [c (consumer node queue)]
     (try
-      (let [cr (gregor/poll c 5000)
+      (let [cr (gregor/poll c 15000)
             message (first cr)
             value (:value message)]
            (if (nil? message)
@@ -228,14 +240,14 @@
   (let [node (:node client)
         c (consumer node queue)]
        (try
-         (timeout 10000 (assoc op :type :ok, :value :exhausted, :debug {:node node})
-            (let [cr (gregor/poll c 5000)
+         (timeout 60000 (assoc op :type :ok, :value :exhausted, :debug {:node node})
+            (let [cr (gregor/poll c 15000)
                   message (last cr)]
                  (if (nil? message)
                    (assoc op :type :ok, :value :exhausted, :debug {:node node})
                    (do
                      ;(println "message:" message)
-                     (timeout 5000 (gregor/commit-offsets-async! c [{:topic queue :partition (:partition message) :offset (+ 1 (:offset message))}]))
+                     (timeout 15000 (gregor/commit-offsets-async! c [{:topic queue :partition (:partition message) :offset (+ 1 (:offset message))}]))
                      ; If this fails, we will throw an exception and return timeout.  That way we don't consume it.
                      (assoc op :type :ok :value :exhausted :debug {:node node :partition (:partition message) :offset (:offset message)}))))
                   )
@@ -256,7 +268,7 @@
   "Given a channel and an operation, dequeues a value and returns the
   corresponding operation."
   [client queue op]
-  (timeout 10000
+  (timeout 20000
            (assoc op :type :fail :error :timeout :debug {:node (:node client)})
            (dequeue-only! op (:node client) queue)))
 

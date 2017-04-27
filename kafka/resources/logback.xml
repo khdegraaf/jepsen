@@ -7,7 +7,7 @@
 <!-- For professional support please see                            -->
 <!--    http://www.qos.ch/shop/products/professionalSupport         -->
 <!--                                                                -->
-<configuration debug="true">
+<configuration debug="false">
     <appender name="A1" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
             <pattern>%-5p %c - %m%n</pattern>
@@ -19,11 +19,12 @@
     <logger name="org.apache.kafka.clients.consumer" level="OFF" />
     <logger name="org.apache.kafka.clients.producer" level="OFF" />
     <logger name="org.apache.kafka.common.utils" level="OFF" />
-    <logger name="jepsen" level="INFO">
+    <logger name="jepsen" level="INFO" additivity="false">
         <appender-ref ref="A1"/>
     </logger>
     <logger name="org.jboss.logging" level="INFO">
         <appender-ref ref="A1"/>
     </logger>
-    <root level="OFF"/>
+    <root level="OFF">
+    </root>
 </configuration>

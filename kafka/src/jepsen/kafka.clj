@@ -1,23 +1,11 @@
 (ns jepsen.kafka
+  (:gen-class)
   (:require  [clojure.tools.logging :refer :all]
              [clojure.java.io :as io]
              [clojure.string     :as str]
              [gregor.core :as gregor]
-             ;[franzy.clients.consumer.protocols :refer :all]
-             ;[franzy.clients.producer.protocols :refer :all]
-             ;[franzy.clients.consumer.client :as consumer]
-             ;[franzy.clients.producer.client :as producer]
-             ;[franzy.clients.producer.defaults :as pd]
-             ;[franzy.clients.consumer.defaults :as cd]
-             ;[franzy.serialization.serializers :as serializers]
-             ;[franzy.serialization.nippy.deserializers :as nippy-deserializers]
-             ;[franzy.serialization.deserializers :as deserializers]
-             ;[clj-kafka.consumer.zk  :as consumer]
-             ;[clj-kafka.producer     :as producer]
-             ;[clj-kafka.new.producer :as nproducer]
-             ;[clj-kafka.zk           :as czk]
-             ;[clj-kafka.core         :as ckafka]
              [jepsen  [db    :as db]
+                      [cli        :as cli]
                       [core  :as jepsen]
                       [client  :as client]
                       [control :as c]
@@ -34,10 +22,9 @@
                                                    relative-time-nanos]]
                       ]
              [jepsen.control :as c :refer  [|]]
-             [knossos.op :as op]
+             [jepsen.checker.timeline :as timeline]
+             ;[knossos.op :as op]
              [jepsen.control.util :as cu]
-             [jepsen.zookeeper :as zk]
-             ;[jepsen.os.debian :as debian]
              [jepsen.os.ubuntu :as ubuntu])
   )
 
@@ -52,7 +39,7 @@
   (info "creating topic")
   ; Delete it if it exists
   (try
-    (info "kafka-topics.sh --delete:" (c/exec (c/lit (str "/opt/kafka/bin/kafka-topics.sh --zookeeper localhost:2181 --delete --topic " topic))))
+    (info "kafka-topics.sh --delete2:" (c/exec (c/lit (str "/opt/kafka/bin/kafka-topics.sh --zookeeper localhost:2181 --delete --topic " topic))))
     (Thread/sleep 20)
     (catch Exception e
       (info "Didn't need to delete old topic.")
@@ -182,7 +169,7 @@
 (defn db
     "Kafka DB for a particular version."
     [sversion kversion]
-    (let [zk (zk/db "3.4.8-1")]
+    ;(let [zk (zk/db "3.4.8-1")]
       (reify db/DB
         (setup!  [_ test node]
           (let [id (Integer.  (re-find #"\d+", (name node)))]
@@ -203,7 +190,7 @@
           ;(info "Kafka NUKED!!!" node)
           ;(info "tearing down Zookeeper")
           ;(db/teardown! zk test node)
-          ))))
+          )));)
 
 (defn test-setup-all []
       (let [db (db "2.12" "0.10.2.0")
@@ -224,7 +211,7 @@
             message (first cr)
             value (:value message)]
            (if (nil? message)
-             (assoc op :type :fail, :value :exhausted, :debug {:node node})
+             (assoc op :type :fail, :error :exhausted, :debug {:node node})
              (do
                ;(println "message:" message)
                (gregor/commit-offsets! c [{:topic queue :partition (:partition message) :offset (+ 1 (:offset message))}])
@@ -234,15 +221,43 @@
        ;(pst e 25)
        ; Exception is probably timeout variant
        (info (str "Dequeue exception: " (.getMessage e) e))
-       (assoc op :type :fail :value :timeout :debug {:node node}))
+       (assoc op :type :fail :error (.getMessage e) :debug {:node node}))
      (finally (gregor/close c)))))
+
+(defn drain! [client queue op]
+  (let [node (:node client)
+        c (consumer node queue)]
+       (try
+         (timeout 10000 (assoc op :type :ok, :value :exhausted, :debug {:node node})
+            (let [cr (gregor/poll c 5000)
+                  message (last cr)]
+                 (if (nil? message)
+                   (assoc op :type :ok, :value :exhausted, :debug {:node node})
+                   (do
+                     ;(println "message:" message)
+                     (timeout 5000 (gregor/commit-offsets-async! c [{:topic queue :partition (:partition message) :offset (+ 1 (:offset message))}]))
+                     ; If this fails, we will throw an exception and return timeout.  That way we don't consume it.
+                     (assoc op :type :ok :value :exhausted :debug {:node node :partition (:partition message) :offset (:offset message)}))))
+                  )
+         (catch Exception e
+           ;(pst e 25)
+           ; Exception is probably timeout variant
+           (info (str "Dequeue exception: " (.getMessage e) e))
+           (assoc op :type :ok :value :exhausted :debug {:node node}))
+         (finally
+           (try
+             (gregor/close c)
+             (catch Exception e
+               (info (str "Drain exception: " (.getMessage e) e))
+               ))
+           ))))
 
 (defn dequeue!
   "Given a channel and an operation, dequeues a value and returns the
   corresponding operation."
   [client queue op]
   (timeout 10000
-           (assoc op :type :fail :value :timeout :debug {:node (:node client)})
+           (assoc op :type :fail :error :timeout :debug {:node (:node client)})
            (dequeue-only! op (:node client) queue)))
 
 (defn enqueue-only! [node queue value]
@@ -259,11 +274,11 @@
 
 (defn enqueue! [client queue op]
   (try
-    (timeout 10000  (assoc op :type :info, :value :timeout, :debug {:node (:node client)})
+    (timeout 10000  (assoc op :type :fail, :error :timeout, :debug {:node (:node client)})
              (enqueue-only! (:node client) queue (:value op))
              (assoc op :type :ok :debug {:node (:node client)}))
     (catch Exception e
-      (assoc op :type :info, :value :timeout))))
+      (assoc op :type :fail, :error (.getMessage e)))))
 
 (defrecord Client [client queue]
   client/Client
@@ -279,9 +294,16 @@
 
   (invoke!  [this test op]
      (case  (:f op)
-         :enqueue (do (topic-status (:node client)) (enqueue! client queue op))
-         :dequeue  (do (topic-status (:node client)) (dequeue! client queue op))
-         :drain  (do
+         :enqueue (do
+                    ;(info "Testing enqueue...")
+                    ;(topic-status (:node client))
+                    (enqueue! client queue op))
+         :dequeue  (do
+                     ;(info "Testing dequeue...")
+                     ;(topic-status (:node client))
+                     (dequeue! client queue op))
+         :drain (drain! client queue op)
+            (comment (do
                    ; Note that this does more dequeues than strictly necessary
                    ; owing to lazy sequence chunking.
                    (->> (repeat op)                  ; Explode drain into
@@ -294,7 +316,7 @@
                                  (log-op completion)
                                  (jepsen/conj-op! test completion)))
                         dorun)
-                   (assoc op :type :ok :value :exhausted))
+                   (assoc op :type :ok :value :exhausted)))
          ))
   )
 
@@ -349,17 +371,27 @@
         (gen/once {:type :invoke
                    :f    :drain})))))
 
-
 (defn kafka-test
-    [sversion kversion]
-      (assoc  tests/noop-test
-             :os ubuntu/os
-             :db  (db sversion kversion)
-             :client  (client)
-             :model   (model/unordered-queue)
-             :nemesis (nemesis/partition-random-halves)
-             :checker    (checker/compose
-                            {:queue       checker/queue
-                            :total-queue checker/total-queue})
-             :generator  gen1
+    [opts]
+      (merge  tests/noop-test
+              {:name "kafka"
+               :os ubuntu/os
+               :db        (db "2.12" "0.10.2.0")
+               :client    (client)
+               :model     (model/unordered-queue)
+               :nemesis   (nemesis/partition-random-halves)
+               :checker   (checker/compose
+                            {:timeline    (timeline/html)
+                             :perf        (checker/perf)
+                             :queue       checker/queue
+                             :total-queue checker/total-queue})
+               :generator  gen1}
       ))
+
+(defn -main
+      "Handles command line arguments. Can either run a test, or a web server for
+      browsing results."
+      [& args]
+      (cli/run! (merge (cli/single-test-cmd {:test-fn kafka-test})
+                       (cli/serve-cmd))
+                args))

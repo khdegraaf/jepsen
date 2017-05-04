@@ -12,6 +12,7 @@
              [tests :as tests]
              [control :as c :refer [|]]
              [checker :as checker]
+             [net :as net]
              [nemesis :as nemesis]
              [generator :as gen]
              [util :refer [timeout meh]]]
@@ -236,7 +237,7 @@
   "Balances must all be non-negative and sum to the model's total."
   []
   (reify checker/Checker
-    (check [this test model history]
+    (check [this test model history opts]
       (let [bad-reads (->> history
                            (r/filter op/ok?)
                            (r/filter #(= :read (:f %)))
@@ -266,11 +267,42 @@
           :nodes []}
          (dissoc opts :name)))
 
+(defn partition-n1
+      "Isolates a single node from the rest of the network."
+      []
+      (nemesis/partitioner (comp nemesis/complete-grudge  (fn [coll] (nemesis/split-one :n1 coll)))))
+
+(defn slowing
+      "Wraps a nemesis. Before underlying nemesis starts, slows the network by dt
+      s. When underlying nemesis resolves, restores network speeds."
+      [nem dt]
+      (reify client/Client
+             (setup! [this test node]
+                     (net/fast! (:net test) test)
+                     (client/setup! nem test node)
+                     this)
+
+             (invoke! [this test op]
+                      (case (:f op)
+                            :start (do (net/slow! (:net test) test) ; {:mean (* dt 1000) :variance 1})
+                                       (client/invoke! nem test op))
+
+                            :stop (try (client/invoke! nem test op)
+                                       (finally
+                                         (net/fast! (:net test) test)))
+
+                            (client/invoke! nem test op)))
+
+             (teardown! [this test]
+                        (net/fast! (:net test) test)
+                        (client/teardown! nem test))))
+
 (defn bank-test
   [node n initial-balance lock-type in-place?]
   (basic-test
     {:name "bank"
-     :concurrency 10
+     :concurrency 12
+     :nodes [:n2 :n3 :n4 :n5] ; n1 is single server
      :model  {:n n :total (* n initial-balance)}
      :client (bank-client (fn conn-spec [_]
                             ; We ignore the nodes here and just use the AWS node
@@ -281,14 +313,21 @@
                              :password    "jepsenpw"})
                             n initial-balance lock-type in-place?)
      :generator (gen/phases
+                  ;(gen/clients (gen/once cn/slow))
                   (->> (gen/mix [bank-read bank-diff-transfer])
                        (gen/clients)
                        (gen/stagger 1/10)
-                       (gen/time-limit 20))
+                       (gen/nemesis
+                       (gen/seq (cycle [(gen/sleep 2)
+                                        {:type :info :f :start}
+                                        (gen/sleep 2)
+                                        {:type :info :f :stop}])))
+                       (gen/time-limit 60))
                   (gen/log "waiting for quiescence")
                   (gen/sleep 10)
+                  ;(gen/clients (gen/once cn/fast))
                   (gen/clients (gen/once bank-read)))
-     :nemesis nemesis/noop
+     :nemesis (slowing (partition-n1) 0.1)
      :checker (checker/compose
                 {:perf (checker/perf)
                  :bank (bank-checker)})}))

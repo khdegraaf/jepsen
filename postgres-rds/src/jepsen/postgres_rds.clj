@@ -1,6 +1,7 @@
 (ns jepsen.postgres-rds
   "Tests for Postgres RDS"
   (:require [clojure.tools.logging :refer :all]
+            [clojure.java.shell :refer [sh]]
             [clojure.core.reducers :as r]
             [clojure.java.io :as io]
             [clojure.string :as str]
@@ -20,6 +21,37 @@
             [jepsen.control.net :as cn]
             [jepsen.os.debian :as debian]
             [clojure.java.jdbc :as j]))
+
+(defn db
+      "Postgresql DB for a particular version."
+      [version]
+      (reify db/DB
+             (setup!  [_ test node]
+                      (info node "installing postgresql" version)
+                      (debian/install {:postgresql version})
+                      (c/exec :echo (slurp (io/resource "pg_hba.conf")) :> "/etc/postgresql/9.4/main/pg_hba.conf")
+                      (c/exec :echo (slurp (io/resource "postgresql.conf")) :> "/etc/postgresql/9.4/main/postgresql.conf")
+                      (c/exec :service :postgresql :restart)
+                      (comment (c/sudo :postgres
+                              (c/exec (c/lit "printf \"jepsenpw\\njepsenpw\\n\" | createuser --pwprompt --no-createdb --no-superuser --no-createrole jepsen"))
+                              (c/exec (c/lit "createdb --owner=jepsen jepsen"))
+                              ))
+                      (info node "done installing postgresql" version))
+             (teardown!  [_ test node]
+                         ; Comment out for now, saves time on retries, setting up sometimes doesn't work first time, succeeds on second try...
+                         (comment (info node "tearing down postgresql")
+                         (c/exec :service :postgresql :stop)
+                         (debian/uninstall! ["postgresql" "postgresql-9.4" "postgresql-client-9.4" "postgresql-client-common" "postgresql-common"])
+                         (c/exec :rm :-rf
+                                 (c/lit "/etc/postgresql/")
+                                 (c/lit "/var/lib/postgresql/")
+                                 (c/lit "/var/lib/postgresql/"))
+                         (info node "done removing postgresql" version)
+                         ))
+             db/LogFiles
+             (log-files [_ test node]
+                        ["/var/log/postgresql-9.4-main.log"])
+             ))
 
 (defn open-conn?
   "Is this connection open? e.g. does it have a :connection key?"
@@ -146,6 +178,7 @@
         (j/execute! c ["create table if not exists accounts
                        (id      int not null primary key,
                        balance bigint not null)"])
+        (j/execute! c ["delete from accounts"])
 
         ; Create initial accts
         (dotimes [i n]
@@ -272,24 +305,49 @@
       []
       (nemesis/partitioner (comp nemesis/complete-grudge  (fn [coll] (nemesis/split-one :n1 coll)))))
 
+(defn drop-n1 []
+  (sh "iptables" "-A" "INPUT" "-s" (cn/ip "n1") "-j" "DROP" "-w"))
+
+(defn heal-n1 []
+  (sh "iptables" "-F" "-w")
+  (sh "iptables" "-X" "-w"))
+
+(defn partition-n1-control
+      []
+      (reify client/Client
+             (setup! [this test _]
+                     (heal-n1)
+                     this)
+
+             (invoke! [this test op]
+                      (case (:f op)
+                            :start (do (drop-n1)
+                                       (assoc op :value "Cut off n1 from control"))
+                            :stop  (do (heal-n1)
+                                       (assoc op :value "fully connected"))))
+
+             (teardown! [this test]
+                        (heal-n1))))
+
 (defn slowing
       "Wraps a nemesis. Before underlying nemesis starts, slows the network by dt
       s. When underlying nemesis resolves, restores network speeds."
       [nem dt]
       (reify client/Client
              (setup! [this test node]
-                     (net/fast! (:net test) test)
                      (client/setup! nem test node)
+                     (net/slow! (:net test) test {:mean (* dt 1000) :variance 1})
                      this)
 
              (invoke! [this test op]
                       (case (:f op)
-                            :start (do (net/slow! (:net test) test) ; {:mean (* dt 1000) :variance 1})
+                            :start (do ;(net/slow! (:net test) test) ; {:mean (* dt 1000) :variance 1})
                                        (client/invoke! nem test op))
 
                             :stop (try (client/invoke! nem test op)
-                                       (finally
-                                         (net/fast! (:net test) test)))
+                                       ;(finally
+                                       ;  (net/fast! (:net test) test))
+                                       )
 
                             (client/invoke! nem test op)))
 
@@ -301,8 +359,9 @@
   [node n initial-balance lock-type in-place?]
   (basic-test
     {:name "bank"
-     :concurrency 12
-     :nodes [:n2 :n3 :n4 :n5] ; n1 is single server
+     :concurrency 100
+     :db        (db "9.4+165+deb8u2")
+     :nodes [:n1] ; n1 is single server
      :model  {:n n :total (* n initial-balance)}
      :client (bank-client (fn conn-spec [_]
                             ; We ignore the nodes here and just use the AWS node
@@ -318,16 +377,16 @@
                        (gen/clients)
                        (gen/stagger 1/10)
                        (gen/nemesis
-                       (gen/seq (cycle [(gen/sleep 2)
+                       (gen/seq (cycle [(gen/sleep 5)
                                         {:type :info :f :start}
-                                        (gen/sleep 2)
+                                        (gen/sleep 5)
                                         {:type :info :f :stop}])))
                        (gen/time-limit 60))
                   (gen/log "waiting for quiescence")
                   (gen/sleep 10)
                   ;(gen/clients (gen/once cn/fast))
                   (gen/clients (gen/once bank-read)))
-     :nemesis (slowing (partition-n1) 0.1)
+     :nemesis (slowing (partition-n1-control) 0.1)
      :checker (checker/compose
                 {:perf (checker/perf)
                  :bank (bank-checker)})}))

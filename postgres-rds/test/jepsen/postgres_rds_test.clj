@@ -8,7 +8,7 @@
 (deftest bank-test'
   (is (:valid? (:results (jepsen/run! (bank-test
                                         node
-                                        4
                                         10
+                                        100
                                         ""
                                         false))))))

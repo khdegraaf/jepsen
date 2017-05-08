@@ -1,5 +1,6 @@
 (ns jepsen.postgres-rds
   "Tests for Postgres RDS"
+  (:gen-class)
   (:require [clojure.tools.logging :refer :all]
             [clojure.java.shell :refer [sh]]
             [clojure.core.reducers :as r]
@@ -10,6 +11,7 @@
             [jepsen [client :as client]
              [core :as jepsen]
              [db :as db]
+             [cli        :as cli]
              [tests :as tests]
              [control :as c :refer [|]]
              [checker :as checker]
@@ -18,6 +20,7 @@
              [generator :as gen]
              [util :refer [timeout meh]]]
             [jepsen.control.util :as cu]
+            [jepsen.checker.timeline :as timeline]
             [jepsen.control.net :as cn]
             [jepsen.os.debian :as debian]
             [clojure.java.jdbc :as j]))
@@ -32,14 +35,15 @@
                       (c/exec :echo (slurp (io/resource "pg_hba.conf")) :> "/etc/postgresql/9.4/main/pg_hba.conf")
                       (c/exec :echo (slurp (io/resource "postgresql.conf")) :> "/etc/postgresql/9.4/main/postgresql.conf")
                       (c/exec :service :postgresql :restart)
-                      (comment (c/sudo :postgres
+                      (c/sudo :postgres
                               (c/exec (c/lit "printf \"jepsenpw\\njepsenpw\\n\" | createuser --pwprompt --no-createdb --no-superuser --no-createrole jepsen"))
                               (c/exec (c/lit "createdb --owner=jepsen jepsen"))
-                              ))
+                              (c/exec (c/lit "PGPASSWORD=jepsenpw psql -U jepsen -h localhost -c \"create table accounts (id int not null primary key, balance bigint not null)\""))
+                              )
                       (info node "done installing postgresql" version))
              (teardown!  [_ test node]
                          ; Comment out for now, saves time on retries, setting up sometimes doesn't work first time, succeeds on second try...
-                         (comment (info node "tearing down postgresql")
+                         (info node "tearing down postgresql")
                          (c/exec :service :postgresql :stop)
                          (debian/uninstall! ["postgresql" "postgresql-9.4" "postgresql-client-9.4" "postgresql-client-common" "postgresql-common"])
                          (c/exec :rm :-rf
@@ -47,7 +51,7 @@
                                  (c/lit "/var/lib/postgresql/")
                                  (c/lit "/var/lib/postgresql/"))
                          (info node "done removing postgresql" version)
-                         ))
+                         )
              db/LogFiles
              (log-files [_ test node]
                         ["/var/log/postgresql-9.4-main.log"])
@@ -175,10 +179,10 @@
     (let [conn (atom (conn-spec node))]
       (with-conn [c conn]
         ; Create table
-        (j/execute! c ["create table if not exists accounts
+                 (comment (j/execute! c ["create table if not exists accounts
                        (id      int not null primary key,
                        balance bigint not null)"])
-        (j/execute! c ["delete from accounts"])
+        (j/execute! c ["delete from accounts"]))
 
         ; Create initial accts
         (dotimes [i n]
@@ -355,38 +359,55 @@
                         (net/fast! (:net test) test)
                         (client/teardown! nem test))))
 
+(def node "n1")
+(def n 10)
+(def initial-balance 100)
+(def lock-type "")
+(def in-place? false)
+
 (defn bank-test
-  [node n initial-balance lock-type in-place?]
+  [opts]
   (basic-test
-    {:name "bank"
-     :concurrency 100
-     :db        (db "9.4+165+deb8u2")
-     :nodes [:n1] ; n1 is single server
-     :model  {:n n :total (* n initial-balance)}
-     :client (bank-client (fn conn-spec [_]
-                            ; We ignore the nodes here and just use the AWS node
-                            {:classname   "org.postgresql.Driver"
-                             :subprotocol "postgresql"
-                             :subname     (str "//" (name node) ":5432/jepsen")
-                             :user        "jepsen"
-                             :password    "jepsenpw"})
-                            n initial-balance lock-type in-place?)
-     :generator (gen/phases
-                  ;(gen/clients (gen/once cn/slow))
-                  (->> (gen/mix [bank-read bank-diff-transfer])
-                       (gen/clients)
-                       (gen/stagger 1/10)
-                       (gen/nemesis
-                       (gen/seq (cycle [(gen/sleep 5)
-                                        {:type :info :f :start}
-                                        (gen/sleep 5)
-                                        {:type :info :f :stop}])))
-                       (gen/time-limit 60))
-                  (gen/log "waiting for quiescence")
-                  (gen/sleep 10)
-                  ;(gen/clients (gen/once cn/fast))
-                  (gen/clients (gen/once bank-read)))
-     :nemesis (slowing (partition-n1-control) 0.1)
-     :checker (checker/compose
-                {:perf (checker/perf)
-                 :bank (bank-checker)})}))
+    (merge opts
+           {:name "bank"
+             :concurrency 80
+             :db        (db "9.4+165+deb8u2")
+             :nodes [:n1] ; n1 is single server
+             :model  {:n n :total (* n initial-balance)}
+             :client (bank-client (fn conn-spec [_]
+                                    ; We ignore the nodes here and just use the single node
+                                    {:classname   "org.postgresql.Driver"
+                                     :subprotocol "postgresql"
+                                     :subname     (str "//" (name node) ":5432/jepsen")
+                                     :user        "jepsen"
+                                     :password    "jepsenpw"})
+                                    n initial-balance lock-type in-place?)
+             :generator (gen/phases
+                          ;(gen/clients (gen/once cn/slow))
+                          (->> (gen/mix [bank-read bank-diff-transfer])
+                               (gen/clients)
+                               (gen/stagger 1/10)
+                               (gen/nemesis
+                               (gen/seq (cycle [(gen/sleep 5)
+                                                {:type :info :f :start}
+                                                (gen/sleep 5)
+                                                {:type :info :f :stop}])))
+                               (gen/time-limit 60))
+                          (gen/log "waiting for quiescence")
+                          (gen/sleep 10)
+                          ;(gen/clients (gen/once cn/fast))
+                          (gen/clients (gen/once bank-read)))
+             :nemesis (slowing (partition-n1-control) 0.5)
+             :checker (checker/compose
+                        {:timeline (timeline/html)
+                         :perf (checker/perf)
+                         :bank (bank-checker)})})))
+
+(defn -main
+      "Handles command line arguments. Can either run a test, or a web server for
+      browsing results."
+      [& args]
+      (cli/run! (merge (cli/single-test-cmd {:test-fn bank-test})
+                       (cli/serve-cmd))
+                args))
+

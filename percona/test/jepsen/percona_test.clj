@@ -4,7 +4,7 @@
             [jepsen.percona :refer :all]
             [jepsen.percona.dirty-reads :as dirty-reads]))
 
-(def version "5.6.25-25.12-1.jessie")
+(def version "5.6.35-26.20-3.jessie")
 
 ;(deftest sets-test'
 ;  (is (:valid? (:results (run! (sets-test version))))))

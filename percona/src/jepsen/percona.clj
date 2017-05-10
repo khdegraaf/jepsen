@@ -92,7 +92,7 @@
   "Stops sql daemon."
   [node]
   (info node "stopping mysqld")
-  (meh (cu/grepkill "mysqld")))
+  (meh (cu/grepkill! "mysqld")))
 
 (defn eval!
   "Evals a mysql string from the command line."
@@ -317,7 +317,7 @@
   "Balances must all be non-negative and sum to the model's total."
   []
   (reify checker/Checker
-    (check [this test model history]
+    (check [this test model history opts]
       (let [bad-reads (->> history
                            (r/filter op/ok?)
                            (r/filter #(= :read (:f %)))

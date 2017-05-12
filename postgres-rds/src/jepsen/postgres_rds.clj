@@ -1,29 +1,29 @@
 (ns jepsen.postgres-rds
-  "Tests for Postgres RDS"
-  (:gen-class)
-  (:require [clojure.tools.logging :refer :all]
-            [clojure.java.shell :refer [sh]]
-            [clojure.core.reducers :as r]
-            [clojure.java.io :as io]
-            [clojure.string :as str]
-            [clojure.pprint :refer [pprint]]
-            [knossos.op :as op]
-            [jepsen [client :as client]
-             [core :as jepsen]
-             [db :as db]
-             [cli        :as cli]
-             [tests :as tests]
-             [control :as c :refer [|]]
-             [checker :as checker]
-             [net :as net]
-             [nemesis :as nemesis]
-             [generator :as gen]
-             [util :refer [timeout meh]]]
-            [jepsen.control.util :as cu]
-            [jepsen.checker.timeline :as timeline]
-            [jepsen.control.net :as cn]
-            [jepsen.os.debian :as debian]
-            [clojure.java.jdbc :as j]))
+    "Tests for Postgres RDS"
+    (:gen-class)
+    (:require [clojure.tools.logging :refer :all]
+      [clojure.java.shell :refer [sh]]
+      [clojure.core.reducers :as r]
+      [clojure.java.io :as io]
+      [clojure.string :as str]
+      [clojure.pprint :refer [pprint]]
+      [knossos.op :as op]
+      [jepsen [client :as client]
+       [core :as jepsen]
+       [db :as db]
+       [cli :as cli]
+       [tests :as tests]
+       [control :as c :refer [|]]
+       [checker :as checker]
+       [net :as net]
+       [nemesis :as nemesis]
+       [generator :as gen]
+       [util :refer [timeout meh]]]
+      [jepsen.control.util :as cu]
+      [jepsen.checker.timeline :as timeline]
+      [jepsen.control.net :as cn]
+      [jepsen.os.debian :as debian]
+      [clojure.java.jdbc :as j] [jepsen.checker :as checker]))
 
 (defn db
       "Postgresql DB for a particular version."
@@ -38,7 +38,8 @@
                       (c/sudo :postgres
                               (c/exec (c/lit "printf \"jepsenpw\\njepsenpw\\n\" | createuser --pwprompt --no-createdb --no-superuser --no-createrole jepsen"))
                               (c/exec (c/lit "createdb --owner=jepsen jepsen"))
-                              (c/exec (c/lit "PGPASSWORD=jepsenpw psql -U jepsen -h localhost -c \"create table accounts (id int not null primary key, balance bigint not null)\""))
+                              (c/exec (c/lit "PGPASSWORD=jepsenpw psql -U jepsen -h localhost -c \"create table accounts (id int not null primary key, balance bigint not null)\"")))
+                              (c/exec (c/lit "PGPASSWORD=jepsenpw psql -U jepsen -h localhost -c \"delete from accounts\"")
                               )
                       (info node "done installing postgresql" version))
              (teardown!  [_ test node]
@@ -54,7 +55,7 @@
                          )
              db/LogFiles
              (log-files [_ test node]
-                        ["/var/log/postgresql-9.4-main.log"])
+                        ["/var/log/postgresql/postgresql-9.4-main.log"])
              ))
 
 (defn open-conn?
@@ -96,7 +97,7 @@
        ~@body
        (catch Throwable t#
          ; Reopen
-         (warn "Lost connection" ~conn-sym ", reconnecting")
+         ;(warn "Lost connection" ~conn-sym ", reconnecting")
          (locking ~conn-atom
            (swap! ~conn-atom (comp open-conn close-conn)))
          (throw t#)))))
@@ -152,7 +153,7 @@
         (catch java.sql.SQLNonTransientConnectionException e#
           (condp = (.getMessage e#)
             "WSREP has not yet prepared node for application use"
-            (assoc ~op :type :fail, :value (.getMessage e#))
+            (assoc ~op :type :fail, :error (.getMessage e#))
 
             (throw e#)))))
 
@@ -166,6 +167,36 @@
                 (with-error-handling ~op
                   (with-txn-retries
                     ~@body))))))
+
+(defmacro with-txn2
+  "Executes body in a transaction, without a timeout, automatically retrying
+  conflicts and handling common errors."
+  [op [c conn-atom] & body]
+  `(with-conn [c# ~conn-atom]
+     (j/with-db-transaction [~c c# :isolation :serializable]
+        (with-error-handling ~op
+           (with-txn-retries
+             ~@body)))))
+
+(defn conn-spec
+      "jdbc connection spec for a node."
+      [node]
+      {:classname   "org.postgresql.jdbc.Driver"
+       :subprotocol "postgresql"
+       :subname     (str "//" (name node) ":5432/jepsen")
+       :user        "jepsen"
+       :password    "jepsenpw"})
+
+(defmacro with-txn3
+          "Executes body in a transaction, with a timeout, automatically retrying
+          conflicts and handling common errors."
+          [op [c node] & body]
+          `(timeout 5000 (assoc ~op :type :info, :value :timed-out)
+                    (with-error-handling ~op
+                                         (with-txn-retries
+                                           (j/with-db-transaction [~c (conn-spec ~node)
+                                                                   :isolation :serializable]
+                                                                  ~@body)))))
 
 (defrecord BankClient [conn-spec
                        conn
@@ -199,43 +230,48 @@
     (assoc this :node node, :conn (atom (conn-spec node))))
 
   (invoke! [this test op]
-    (with-txn op [c conn]
+    (try
+     (with-txn3 op [c node]
       (try
-        (case (:f op)
-          :read (->> (j/query c [(str "select * from accounts" lock-type)])
-                     (mapv :balance)
-                     (assoc op :type :ok, :value))
+       (case (:f op)
+             :read (->> (j/query c [(str "select * from accounts" lock-type)])
+                        (mapv :balance)
+                        (assoc op :type :ok, :value))
 
-          :transfer
-          (let [{:keys [from to amount]} (:value op)
-                b1 (-> c
-                       (j/query [(str "select * from accounts where id = ?"
-                                      lock-type)
-                                 from]
-                         :row-fn :balance)
-                       first
-                       (- amount))
-                b2 (-> c
-                       (j/query [(str "select * from accounts where id = ?"
-                                      lock-type)
-                                 to]
-                         :row-fn :balance)
-                       first
-                       (+ amount))]
-            (cond (neg? b1)
-                  (assoc op :type :fail, :value [:negative from b1])
+             :transfer
+             (let [{:keys [from to amount]} (:value op)
+                   b1 (-> c
+                          (j/query [(str "select * from accounts where id = ?"
+                                         lock-type)
+                                    from]
+                                   :row-fn :balance)
+                          first
+                          (- amount))
+                   b2 (-> c
+                          (j/query [(str "select * from accounts where id = ?"
+                                         lock-type)
+                                    to]
+                                   :row-fn :balance)
+                          first
+                          (+ amount))]
+                  (info "starting" "process:" (:process op) "from:" from "to:" to "amount:" amount "b1:" b1 "b2:" b2)
+                  (cond (neg? b1)
+                        (assoc op :type :fail, :error [:negative from b1])
 
-                  (neg? b2)
-                  (assoc op :type :fail, :value [:negative to b2])
+                        (neg? b2)
+                        (assoc op :type :fail, :error [:negative to b2])
 
-                  true
-                  (if in-place?
-                    (do (j/execute! c ["update accounts set balance = balance - ? where id = ?" amount from])
-                        (j/execute! c ["update accounts set balance = balance + ? where id = ?" amount to])
-                        (assoc op :type :ok))
-                    (do (j/update! c :accounts {:balance b1} ["id = ?" from])
-                        (j/update! c :accounts {:balance b2} ["id = ?" to])
-                        (assoc op :type :ok)))))))))
+                        true
+                        (if in-place?
+                          (do (j/execute! c ["update accounts set balance = balance - ? where id = ?" amount from])
+                              (j/execute! c ["update accounts set balance = balance + ? where id = ?" amount to])
+                              (assoc op :type :ok))
+                          (do (j/update! c :accounts {:balance b1} ["id = ?" from])
+                              (j/update! c :accounts {:balance b2} ["id = ?" to])
+                              (info "finished" "process:" (:process op) "from:" from "to:" to "amount:" amount "b1:" b1 "b2:" b2)
+                              (assoc op :type :ok))))))))
+     (catch Exception e
+       (assoc op :type :fail, :error (.getMessage e)))))
 
   (teardown! [_ test]))
 
@@ -262,7 +298,7 @@
      :f     :transfer
      :value {:from   (rand-int n)
              :to     (rand-int n)
-             :amount (rand-int 5)}}))
+             :amount (+ 1 (rand-int 4))}}))
 
 (def bank-diff-transfer
   "Like transfer, but only transfers between *different* accounts."
@@ -274,7 +310,7 @@
   "Balances must all be non-negative and sum to the model's total."
   []
   (reify checker/Checker
-    (check [this test model history opts]
+         (check [this test model history opts]
       (let [bad-reads (->> history
                            (r/filter op/ok?)
                            (r/filter #(= :read (:f %)))
@@ -309,8 +345,22 @@
       []
       (nemesis/partitioner (comp nemesis/complete-grudge  (fn [coll] (nemesis/split-one :n1 coll)))))
 
+(defn ip
+      "Look up an ip for a hostname"
+      [host]
+      ; getent output is of the form:
+      ; 74.125.239.39   STREAM host.com
+      ; 74.125.239.39   DGRAM
+      ; ...
+      (first (str/split (->> (:out (sh "getent" "ahosts" host))
+                             (str/split-lines)
+                             (first))
+                        #"\s+")))
+
+(def ipn1 (ip "n1"))
+
 (defn drop-n1 []
-  (sh "iptables" "-A" "INPUT" "-s" (cn/ip "n1") "-j" "DROP" "-w"))
+  (sh "iptables" "-A" "INPUT" "-s" (ip "n1") "-j" "DROP" "-w"))
 
 (defn heal-n1 []
   (sh "iptables" "-F" "-w")
@@ -357,10 +407,11 @@
 
              (teardown! [this test]
                         (net/fast! (:net test) test)
-                        (client/teardown! nem test))))
+                        (client/teardown! nem test)
+                        )))
 
 (def node "n1")
-(def n 10)
+(def n 3)
 (def initial-balance 100)
 (def lock-type "")
 (def in-place? false)
@@ -370,7 +421,7 @@
   (basic-test
     (merge opts
            {:name "bank"
-             :concurrency 80
+             :concurrency 10
              :db        (db "9.4+165+deb8u2")
              :nodes [:n1] ; n1 is single server
              :model  {:n n :total (* n initial-balance)}
@@ -392,9 +443,9 @@
                                                 {:type :info :f :start}
                                                 (gen/sleep 5)
                                                 {:type :info :f :stop}])))
-                               (gen/time-limit 60))
+                               (gen/time-limit 30))
                           (gen/log "waiting for quiescence")
-                          (gen/sleep 10)
+                          (gen/sleep 60)
                           ;(gen/clients (gen/once cn/fast))
                           (gen/clients (gen/once bank-read)))
              :nemesis (slowing (partition-n1-control) 0.5)

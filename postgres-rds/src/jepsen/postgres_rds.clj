@@ -37,10 +37,13 @@
                       (c/exec :service :postgresql :restart)
                       (c/sudo :postgres
                               (c/exec (c/lit "printf \"jepsenpw\\njepsenpw\\n\" | createuser --pwprompt --no-createdb --no-superuser --no-createrole jepsen"))
-                              (c/exec (c/lit "createdb --owner=jepsen jepsen"))
-                              (c/exec (c/lit "PGPASSWORD=jepsenpw psql -U jepsen -h localhost -c \"create table accounts (id int not null primary key, balance bigint not null)\"")))
-                              (c/exec (c/lit "PGPASSWORD=jepsenpw psql -U jepsen -h localhost -c \"delete from accounts\"")
-                              )
+                              (c/exec (c/lit "createdb --owner=jepsen jepsen")))
+                      ; postgresql gives weird errors when running this (even if checking if not exists) asynchronously from a bunch of clients, so do it here.
+                      (c/exec (c/lit "PGPASSWORD=jepsenpw psql -U jepsen -h localhost -c \"create table accounts (id int not null primary key, balance bigint not null)\""))
+                      (c/exec (c/lit "PGPASSWORD=jepsenpw psql -U jepsen -h localhost -c \"delete from accounts\""))
+                      (c/exec (c/lit "PGPASSWORD=jepsenpw psql -U jepsen -h localhost -c \"create table if not exists jepsen (id serial not null primary key, value  bigint not null)\""))
+                      (c/exec (c/lit "PGPASSWORD=jepsenpw psql -U jepsen -h localhost -c \"delete from jepsen\""))
+
                       (info node "done installing postgresql" version))
              (teardown!  [_ test node]
                          ; Comment out for now, saves time on retries, setting up sometimes doesn't work first time, succeeds on second try...
@@ -337,7 +340,8 @@
   [opts]
   (merge tests/noop-test
          {:name (str "postgres rds " (:name opts))
-          :nodes []}
+          :db        (db "9.4+165+deb8u2")
+          }
          (dissoc opts :name)))
 
 (defn partition-n1
@@ -422,7 +426,6 @@
     (merge opts
            {:name "bank"
              :concurrency 10
-             :db        (db "9.4+165+deb8u2")
              :nodes [:n1] ; n1 is single server
              :model  {:n n :total (* n initial-balance)}
              :client (bank-client (fn conn-spec [_]
@@ -443,9 +446,9 @@
                                                 {:type :info :f :start}
                                                 (gen/sleep 5)
                                                 {:type :info :f :stop}])))
-                               (gen/time-limit 30))
+                               (gen/time-limit 60))
                           (gen/log "waiting for quiescence")
-                          (gen/sleep 60)
+                          (gen/sleep 30)
                           ;(gen/clients (gen/once cn/fast))
                           (gen/clients (gen/once bank-read)))
              :nemesis (slowing (partition-n1-control) 0.5)
@@ -454,11 +457,78 @@
                          :perf (checker/perf)
                          :bank (bank-checker)})})))
 
+(defn with-nemesis
+      "Wraps a client generator in a nemesis that induces failures and eventually
+      stops."
+      [client]
+      (gen/phases
+        (gen/phases
+          (->> client
+               (gen/nemesis
+                 (gen/seq (cycle [(gen/sleep 5)
+                                  {:type :info, :f :start}
+                                  (gen/sleep 5)
+                                  {:type :info, :f :stop}])))
+               (gen/time-limit 60))
+          (gen/nemesis (gen/once {:type :info, :f :stop}))
+          (gen/log "waiting for quiescence")
+          (gen/sleep 10))))
+
+(defn set-client
+      [node]
+      (reify client/Client
+             (setup! [this test node]
+                     (j/with-db-connection [c (conn-spec node)]
+                                           (comment (j/execute! c ["create table if not exists jepsen
+                                                            (id serial not null primary key,
+                                                            value  bigint not null)"])
+                                           (j/execute! c ["delete from jepsen"])))
+
+                     (set-client node))
+
+             (invoke! [this test op]
+                      (with-txn3 op [c node]
+                                (try
+                                  (case (:f op)
+                                        :add  (do (j/insert! c :jepsen (select-keys op [:value]))
+                                                  (assoc op :type :ok))
+                                        :read (->> (j/query c ["select * from jepsen"])
+                                                   (mapv :value)
+                                                   (into (sorted-set))
+                                                   (assoc op :type :ok, :value))))))
+
+             (teardown! [_ test])))
+
+(defn sets-test
+      [opts]
+      (basic-test
+        (merge opts
+          {:name "set"
+           :concurrency 40
+           :nodes [:n1] ; n1 is single server
+           :client (set-client nil)
+           :generator (gen/phases
+                        (->> (range)
+                             (map (partial array-map
+                                           :type :invoke
+                                           :f :add
+                                           :value))
+                             gen/seq
+                             (gen/delay 1/10)
+                             with-nemesis)
+                        (->> {:type :invoke, :f :read, :value nil}
+                             gen/once
+                             gen/clients))
+           :nemesis (slowing (partition-n1-control) 0.5)
+           :checker (checker/compose
+                      {:perf (checker/perf)
+                       :set  checker/set})})))
+
 (defn -main
       "Handles command line arguments. Can either run a test, or a web server for
       browsing results."
       [& args]
-      (cli/run! (merge (cli/single-test-cmd {:test-fn bank-test})
+      (cli/run! (merge (cli/single-test-cmd {:test-fn sets-test})
                        (cli/serve-cmd))
                 args))
 

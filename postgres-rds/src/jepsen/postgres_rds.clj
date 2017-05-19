@@ -164,7 +164,7 @@
   "Executes body in a transaction, with a timeout, automatically retrying
   conflicts and handling common errors."
   [op [c conn-atom] & body]
-  `(timeout 5000 (assoc ~op :type :info, :value :timed-out)
+  `(timeout 5000 (assoc ~op :type :fail, :error :timeout)
             (with-conn [c# ~conn-atom]
               (j/with-db-transaction [~c c# :isolation :serializable]
                 (with-error-handling ~op
@@ -186,7 +186,10 @@
       [node]
       {:classname   "org.postgresql.jdbc.Driver"
        :subprotocol "postgresql"
-       :subname     (str "//" (name node) ":5432/jepsen")
+       :subname     (str "//" (name node) ":5432/jepsen?"
+                         "loginTimeout=5&"
+                         "socketTimeout=5&"
+                         "tcpKeepAlive=true")
        :user        "jepsen"
        :password    "jepsenpw"})
 
@@ -194,12 +197,29 @@
           "Executes body in a transaction, with a timeout, automatically retrying
           conflicts and handling common errors."
           [op [c node] & body]
-          `(timeout 5000 (assoc ~op :type :info, :value :timed-out)
+          `(timeout 10000 (assoc ~op :type :fail, :error ::timeout)
                     (with-error-handling ~op
                                          (with-txn-retries
                                            (j/with-db-transaction [~c (conn-spec ~node)
                                                                    :isolation :serializable]
                                                                   ~@body)))))
+
+(defmacro with-txn-once
+          "Executes body in a transaction, with a timeout, automatically retrying
+          conflicts and handling common errors."
+          [op [c node] & body]
+          `(timeout 10000 (assoc ~op :type :fail, :error ::timeout)
+                     (j/with-db-transaction [~c (conn-spec ~node)
+                                                 :isolation :serializable]
+                                                  ~@body)))
+
+(defmacro timeout-body
+          "Executes body in a transaction, with a timeout, automatically retrying
+          conflicts and handling common errors."
+          [op [c node] & body]
+          `(timeout 10000 (assoc ~op :type :fail, :error :timeout)
+                    (let [~c (conn-spec ~node)]
+                      ~@body)))
 
 (defrecord BankClient [conn-spec
                        conn
@@ -442,9 +462,9 @@
                                (gen/clients)
                                (gen/stagger 1/10)
                                (gen/nemesis
-                               (gen/seq (cycle [(gen/sleep 5)
+                               (gen/seq (cycle [(gen/sleep 10)
                                                 {:type :info :f :start}
-                                                (gen/sleep 5)
+                                                (gen/sleep 10)
                                                 {:type :info :f :stop}])))
                                (gen/time-limit 60))
                           (gen/log "waiting for quiescence")
@@ -465,9 +485,9 @@
         (gen/phases
           (->> client
                (gen/nemesis
-                 (gen/seq (cycle [(gen/sleep 5)
+                 (gen/seq (cycle [(gen/sleep 10)
                                   {:type :info, :f :start}
-                                  (gen/sleep 5)
+                                  (gen/sleep 10)
                                   {:type :info, :f :stop}])))
                (gen/time-limit 60))
           (gen/nemesis (gen/once {:type :info, :f :stop}))
@@ -487,15 +507,17 @@
                      (set-client node))
 
              (invoke! [this test op]
-                      (with-txn3 op [c node]
-                                (try
-                                  (case (:f op)
-                                        :add  (do (j/insert! c :jepsen (select-keys op [:value]))
-                                                  (assoc op :type :ok))
-                                        :read (->> (j/query c ["select * from jepsen"])
-                                                   (mapv :value)
-                                                   (into (sorted-set))
-                                                   (assoc op :type :ok, :value))))))
+                      (try
+                        (with-txn-once op [c node]
+                          (case (:f op)
+                                :add  (do (j/insert! c :jepsen (select-keys op [:value]))
+                                          (assoc op :type :ok))
+                                :read (->> (j/query c ["select * from jepsen"])
+                                           (mapv :value)
+                                           (into (sorted-set))
+                                           (assoc op :type :ok, :value))))
+                        (catch Exception e
+                          (assoc op :type :fail, :error (.getMessage e)))))
 
              (teardown! [_ test])))
 
@@ -514,12 +536,13 @@
                                            :f :add
                                            :value))
                              gen/seq
-                             (gen/delay 1/10)
+                             (gen/stagger 1/10)
+                             ;(gen/delay 1/10)
                              with-nemesis)
                         (->> {:type :invoke, :f :read, :value nil}
                              gen/once
                              gen/clients))
-           :nemesis (slowing (partition-n1-control) 0.5)
+           :nemesis (slowing (partition-n1-control) 0.1)
            :checker (checker/compose
                       {:perf (checker/perf)
                        :set  checker/set})})))

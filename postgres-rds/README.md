@@ -30,7 +30,7 @@ address the problem.
  
 v1: <img src="https://github.com/khdegraaf/jepsen/blob/master/postgres-rds/images/failed.jpg?raw-true" />
 
-v2: ![Failed Commit](/images/failed.jpg?raw=true "Failed Commit")
+v2: ![Failed Commit](images/failed.jpg?raw=true "Failed Commit")
  
 Let's reproduce  
 

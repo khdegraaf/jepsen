@@ -28,7 +28,8 @@ In CAP theoretical terms, you encountered a Partition, and Consistency suffered.
 is that the basic transaction API's do nothing to address this problem, and clients don't try to fix or
 address the problem.
  
-![Failed Commit] (https://github.com/khdegraaf/jepsen/blob/master/postgres-rds/images/failed.jpg "Failed Commit")
+<img src="https://github.com/khdegraaf/jepsen/blob/master/postgres-rds/images/failed.jpg?raw-true" />
+![Failed Commit] (https://github.com/khdegraaf/jepsen/blob/master/postgres-rds/images/failed.jpg?raw=true "Failed Commit")
  
 Let's reproduce  
 

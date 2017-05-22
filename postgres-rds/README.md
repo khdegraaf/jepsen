@@ -29,7 +29,7 @@ is that the basic transaction API's do nothing to address this problem, and clie
 address the problem.
  
 <img src="https://github.com/khdegraaf/jepsen/blob/master/postgres-rds/images/failed.jpg?raw-true" />
-![Failed Commit] (https://github.com/khdegraaf/jepsen/blob/master/postgres-rds/images/failed.jpg?raw=true "Failed Commit")
+![Failed Commit] (images/failed.jpg?raw=true "Failed Commit")
  
 Let's reproduce  
 

@@ -28,11 +28,32 @@ In CAP theoretical terms, you encountered a Partition, and Consistency suffered.
 is that the basic transaction API's do nothing to address this problem, and clients don't try to fix or
 address the problem.
  
-v1: <img src="https://github.com/khdegraaf/jepsen/blob/master/postgres-rds/images/failed.jpg?raw-true" />
-
-v2: ![Failed Commit](images/failed.jpg?raw=true "Failed Commit")
+![Failed Commit](images/failed.jpg?raw=true "Failed Commit")
  
-Let's reproduce  
+So let's see what we can do to demonstrate and reproduce this problem in the Jepsen framework.   You can
+get a copy of this project from 
+ 
+    https://github.com/khdegraaf/jepsen
+    
+Once you have a clone, cd into the docker subdirectory and run
+
+    ./up.sh
+
+once that is finished, it will give you a command line to execute to enter the docker environment we will be
+running in
+
+    docker exec -it jepsen-control bash
+
+once you are in docker, you will start at the top level jepsen subdirectory so cd into the postgres-rds subdirectory and run
+    
+    lein run test
+    
+In order to maximize the chance of catching these in transit errors, we will configure our code to
+slow down the network by 0.5sec for each network message, and run with 40 concurrent worker threads to increase
+the number of requests and the number of chances for a problem.  If everything goes correctly, you will see a
+history log like the following
+     
+![Screenshot #1](images/screen1.png?raw=true "Screenshot #1")     
 
 But it is fixable.  If a transaction, rather than being a single distributed commit call, instead
 performanced the commit in two phases, a prepare

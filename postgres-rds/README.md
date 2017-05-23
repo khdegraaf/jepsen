@@ -53,7 +53,7 @@ slow down the network by 0.5sec for each network message, and run with 40 concur
 the number of requests and the number of chances for a problem.  If everything goes correctly, you will see a
 history log like the following
      
-![Screenshot #1](images/screen1.png?raw=true "Screenshot #1")     
+![Screenshot #1](images/Screen1.png?raw=true "Screenshot #1")     
 
 But it is fixable.  If a transaction, rather than being a single distributed commit call, instead
 performanced the commit in two phases, a prepare

@@ -59,7 +59,16 @@ Every 10 seconds and for 10 seconds, we will start and then stop the nemesis pro
 communicationi between the client node (called control) and the server node (called n1 here).  The result will be errors
 and results like the following
      
-![Screenshot #2](images/Screen2.png?raw=true "Screenshot #2")     
+![Screenshot #2](images/Screen2.png?raw=true "Screenshot #2") 
+    
+After cycling through this for 60 seconds, it will end up with the following results
+    
+![Screenshot #3](images/Screen3.png?raw=true "Screenshot #3")
+
+and
+
+![Screenshot #4](images/Screen4.png?raw=true "Screenshot #4")    
+    
 
 But it is fixable.  If a transaction, rather than being a single distributed commit call, instead
 performanced the commit in two phases, a prepare

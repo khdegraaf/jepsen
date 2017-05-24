@@ -105,9 +105,16 @@ and
 
 ![Throughput Rate #1](images/rate1.png?raw=true "Throughput Rate #1")
 
+But this problem is fixable.  If a transaction, rather than being a single distributed commit call, instead
+performed the commit in two phases, a prepare phase that confirmed that it was possible and performed any needed
+locks, and then a second phase to actually do the submission (especially if put in a highly available distributed
+queue) and an idempotent commit via id that can be blindly retried until fully confirmed.  But there aren't any
+standard out of the box libraries to do this, and clients generally don't go to the effort.  
 
+So in the meanwhile, reducing the window for problems is the main practical step cloud or database vendors can do
+We can use the Jepsen framework to assess the likelihood of this problem occuring under various circumstances.
+By doing so, we can take steps to make and measure mprovements in this area as well as compare that probability to 
+competitive products.
 
-But it is fixable.  If a transaction, rather than being a single distributed commit call, instead
-performanced the commit in two phases, a prepare
 
 ## 

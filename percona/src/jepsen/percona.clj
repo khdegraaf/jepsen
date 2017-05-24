@@ -28,7 +28,7 @@
    "/var/log/mysql.err"
    "/var/lib/mysql/queries.log"])
 
-(def dir "/var/lib/mysql")
+(def my-dir "/var/lib/mysql")
 (def stock-dir "/var/lib/mysql-stock")
 
 (defn install!
@@ -60,7 +60,7 @@
       (c/exec :rm :-rf "/etc/mysql/conf.d/jepsen.cnf")
 
       ; Don't preserve old dir
-      (c/exec :rm :-rf dir)
+      (c/exec :rm :-rf my-dir)
 
       (debian/install {:percona-xtradb-cluster-56 version})
 
@@ -68,7 +68,7 @@
 
       ; Squirrel away a copy of the data files
       (c/exec :rm :-rf stock-dir)
-      (c/exec :cp :-rp dir stock-dir))))
+      (c/exec :cp :-rp my-dir stock-dir))))
 
 (defn cluster-address
   "Connection string for a test."
@@ -140,8 +140,8 @@
       (c/su
         (stop! node)
         (apply c/exec :truncate :-c :--size 0 log-files))
-        (c/exec :rm :-rf dir)
-        (c/exec :cp :-rp stock-dir dir))
+        (c/exec :rm :-rf my-dir)
+        (c/exec :cp :-rp stock-dir my-dir))
 
     db/LogFiles
     (log-files [_ test node] log-files)))

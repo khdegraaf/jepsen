@@ -1,4 +1,4 @@
-(defproject org.clojars.khdegraaf/jepsen "0.1.5.2-SNAPSHOT"
+(defproject org.clojars.khdegraaf/jepsen "0.1.5.7-SNAPSHOT"
   :description "Call Me Maybe: Network Partitions in Practice"
   :dependencies [[org.clojure/clojure "1.8.0"]
                  [org.clojure/data.fressian "0.2.1"]

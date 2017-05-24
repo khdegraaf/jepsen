@@ -132,6 +132,10 @@
 
           (let [; The OK set is every read value which we tried to add
                 ok          (set/intersection final-read attempts)
+                not-ok      (set/difference attempts ok)
+
+                attemptsn   (count attempts)
+                acknowledged  (count adds)
 
                 ; Unexpected records are those we *never* attempted.
                 unexpected  (set/difference final-read attempts)
@@ -144,14 +148,23 @@
                 recovered   (set/difference ok adds)]
 
             {:valid?          (and (empty? lost) (empty? unexpected))
+             :attempts        attemptsn
+             :acknowledged    acknowledged
+             :acknowledged-frac (util/fraction acknowledged attemptsn)
+             :unacknowledged  (- attemptsn acknowledged)
              :ok              (util/integer-interval-set-str ok)
+             :ok-count        (count ok)
+             :not-ok          (util/integer-interval-set-str not-ok)
+             :not-ok-count    (count not-ok)
+             :not-ok-frac     (util/fraction (count not-ok) attemptsn)
              :lost            (util/integer-interval-set-str lost)
              :unexpected      (util/integer-interval-set-str unexpected)
              :recovered       (util/integer-interval-set-str recovered)
-             :ok-frac         (util/fraction (count ok) (count attempts))
-             :unexpected-frac (util/fraction (count unexpected) (count attempts))
-             :lost-frac       (util/fraction (count lost) (count attempts))
-             :recovered-frac  (util/fraction (count recovered) (count attempts))}))))))
+             :recovered-count (count recovered)
+             :ok-frac         (util/fraction (count ok) attemptsn)
+             :unexpected-frac (util/fraction (count unexpected) attemptsn)
+             :lost-frac       (util/fraction (count lost) attemptsn)
+             :recovered-frac  (util/fraction (count recovered) attemptsn)}))))))
 
 (defn fraction
   "a/b, but if b is zero, returns unity."

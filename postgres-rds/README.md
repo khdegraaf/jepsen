@@ -61,14 +61,51 @@ and results like the following
      
 ![Screenshot #2](images/Screen2.png?raw=true "Screenshot #2") 
     
-After cycling through this for 60 seconds, it will end up with the following results
+After cycling through this for 60 seconds, it will end up with the following log
     
 ![Screenshot #3](images/Screen3.png?raw=true "Screenshot #3")
 
+and then the results
+
+![Screenshot #4](images/Screen4.png?raw=true "Screenshot #4") 
+   
+As you can see from the results, 1364 writes were attempted, and 240 of these were unacknowledged.  Of those 240
+unacknowledged results, 197 of them were failures.  But 43 of them were recovered when all if the written data
+was examined at the end.  These 43 cases represent the possibility of our problem scenario, albeit with a perhaps
+exaggerated probability due to slowing down the network.  But network partitions in the real world could approach 
+this, it depends on network latency, as well as the size and latency of the database transaction in the
+application itself.  
+
+If we push this to the highest possible throughput by dropping out all network slowness we will see
+best case resuolts.  This is because our test database transaction consists of inserting a single integer 
+rather than a more complex multi value read, modify and write transaction that might be more representative
+of an actual credit card charge in real life.  We might see something like this
+
+![Screenshot #5](images/Screen5.png?raw=true "Screenshot #5")
+
+The attempted writes will be much more numerous due to lowered latency, while the unacknowledged count will remain
+the same, as it is determined by the length of the network failure, divided by the timeout interval times the number
+of concurrent threads.  But as you will see, the number of false negatives is significantly reduced down to 3.  But
+a round-trip transaction cost of only 10ms is pretty realistic.
+
+In a cloud hosted environment, a more realistic transaction request latency might be more like 100ms plus whatever
+time the database takes to do the commit.
+    
+![Screenshot #6](images/Screen6.png?raw=true "Screenshot #6")
+
+Here are some framework generated graphs that have more throughput numerics
+
+![Latency Quantiles #1](images/latency-quantiles1.png?raw=true "Latency Quantiles #1")
+
 and
 
-![Screenshot #4](images/Screen4.png?raw=true "Screenshot #4")    
-    
+![Latency Raw #1](images/latency-raw1.png?raw=true "Latency Raw #1")
+
+and
+
+![Throughput Rate #1](images/rate1.png?raw=true "Throughput Rate #1")
+
+
 
 But it is fixable.  If a transaction, rather than being a single distributed commit call, instead
 performanced the commit in two phases, a prepare

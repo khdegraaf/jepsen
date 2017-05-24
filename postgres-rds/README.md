@@ -2,7 +2,7 @@
 
 Jepsen is a framework to enable testing the accuracy of Consistency and Availability guarantees while undergoing
 problems with network partitions of various sorts.  As such, it is most commonly used to evaluate multi-server
-systems.  As such, the most commong target of such testing is various multi-server node distributed systems.
+systems.  The most common target of such testing is various multi-server node distributed systems.
 Postgres is a great relational SQL server database with full ACID guarantees.  It is a popular choice for smaller
 but still decent sized websites and applications where full linear scaling isn't required.  With respect to
 the CAP theorem, it is commonly thought of as a CP system since all writes are performed on a single primary
@@ -25,7 +25,7 @@ server's response to various clients requests.  But it doesn't address the issue
 the server disagreeing on what took place.  It is entirely possible that a transaction failed, but due
 to a network problem, the successful confirmation got lost as a result.
 In CAP theoretical terms, you encountered a Partition, and Consistency suffered.  The ugly truth of the matter
-is that the basic transaction API's do nothing to address this problem, and clients don't try to fix or
+is that the basic transaction API's do nothing to address this problem, and clients generally don't try to fix or
 address the problem.
  
 ![Failed Commit](images/failed.jpg?raw=true "Failed Commit")
@@ -33,13 +33,13 @@ address the problem.
 So let's see what we can do to demonstrate and reproduce this problem in the Jepsen framework.   You can
 get a copy of this project from 
  
-    https://github.com/khdegraaf/jepsen
+    git clone https://github.com/khdegraaf/jepsen
     
 Once you have a clone, cd into the docker subdirectory and run
 
     ./up.sh
 
-once that is finished, it will give you a command line to execute to enter the docker environment we will be
+once that is finished, it will give you a command line to execute to enter the docker compose environment we will be
 running in
 
     docker exec -it jepsen-control bash
@@ -48,7 +48,7 @@ once you are in docker, you will start at the top level jepsen subdirectory so c
     
     lein run test
     
-In order to maximize the chance of catching these in transit errors, we will configure our code to
+In order to maximize the chance of catching these in transit errors, we have configured our code to
 slow down the network by 0.5sec for each network message, and run with 40 concurrent worker threads to increase
 the number of requests and the number of chances for a problem.  If everything goes correctly, you will see a
 history log like the following
@@ -56,7 +56,7 @@ history log like the following
 ![Screenshot #1](images/Screen1.png?raw=true "Screenshot #1")
      
 Every 10 seconds and for 10 seconds, we will start and then stop the nemesis process, which will cut off all network
-communicationi between the client node (called control) and the server node (called n1 here).  The result will be errors
+communication between the client node (called control) and the server node (called n1 here).  The result will be errors
 and results like the following
      
 ![Screenshot #2](images/Screen2.png?raw=true "Screenshot #2") 
@@ -77,7 +77,7 @@ this, it depends on network latency, as well as the size and latency of the data
 application itself.  
 
 If we push this to the highest possible throughput by dropping out all network slowness we will see
-best case resuolts.  This is because our test database transaction consists of inserting a single integer 
+best case results.  This is because our test database transaction consists of inserting a single integer 
 rather than a more complex multi value read, modify and write transaction that might be more representative
 of an actual credit card charge in real life.  We might see something like this
 
@@ -86,14 +86,16 @@ of an actual credit card charge in real life.  We might see something like this
 The attempted writes will be much more numerous due to lowered latency, while the unacknowledged count will remain
 the same, as it is determined by the length of the network failure, divided by the timeout interval times the number
 of concurrent threads.  But as you will see, the number of false negatives is significantly reduced down to 3.  But
-a round-trip transaction cost of only 10ms is pretty realistic.
+a round-trip transaction cost of only 10ms is pretty unrealistic.  There is little to no network latency running on
+a local network in docker.
 
 In a cloud hosted environment, a more realistic transaction request latency might be more like 100ms plus whatever
-time the database takes to do the commit.
+time the database takes to do the commit.  If we modify the network slowness to 100ms, we will get 200ms round-trip 
+latency and something like the following results.
     
 ![Screenshot #6](images/Screen6.png?raw=true "Screenshot #6")
 
-Here are some framework generated graphs that have more throughput numerics
+Here are some framework generated graphs for this scenario that have more throughput numerics
 
 ![Latency Quantiles #1](images/latency-quantiles1.png?raw=true "Latency Quantiles #1")
 
